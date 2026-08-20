@@ -7,24 +7,77 @@ This repository contains the scripts used to generate HumanEval binary-derived a
 - RISC-V64 Linux
 - ARM64 macOS
 
-For each HumanEval task and optimization level (`O0` and `O2`), the datasets contain:
+There are 164 HumanEval tasks in each optimization split (`O0` and `O2`).
 
-- `task_name` — HumanEval task identifier
-- `source_code` — original C source
-- `compiler_asm` — compiler-generated assembly from `clang -S`
-- `object_asm` — disassembly of the relocatable object file
-- `shared_asm` — disassembly of the linked shared library
-- `program_asm` — disassembly of the linked executable
+## Final dataset schema
 
-There are 164 HumanEval tasks in each optimization split.
+For each HumanEval task and optimization level, the final relocation-preserving datasets contain:
 
-The final relocation-preserving datasets use:
+- `task_name` - HumanEval task identifier
+- `source_code` - original C source
+- `compiler_asm` - compiler-generated assembly from the normal, non-PIC compilation path
+- `object_asm` - relocation-preserving disassembly of the normal relocatable object
+- `shared_asm` - relocation-preserving disassembly of the linked shared library
+- `program_asm` - relocation-preserving disassembly of the linked executable
+- `compiler_pic_asm` - compiler-generated assembly from the PIC compilation path using `-fPIC -S`
+- `pic_object_asm` - relocation-preserving disassembly of the PIC relocatable object
 
-- Relocatable objects: `llvm-objdump -dr`
-- Linked shared libraries: `llvm-objdump -drR`
-- Linked executables: `llvm-objdump -drR`
+The six assembly representations belong to two distinct compilation-provenance families:
 
-The relocation flags are important because plain `objdump -d` omits relocation information that is present in relocatable object files.
+```text
+NORMAL
+compiler_asm
+    -> object_asm
+    -> program_asm
+
+PIC
+compiler_pic_asm
+    -> pic_object_asm
+    -> shared_asm
+```
+
+This distinction is important.
+
+The linked shared library is built from separately compiled position-independent (`-fPIC`) objects. Therefore, `shared_asm` belongs to the PIC compilation lineage and should be compared against `compiler_pic_asm` and `pic_object_asm`, rather than against the normal `compiler_asm` and `object_asm` lineage.
+
+The final datasets are published at:
+
+```text
+adpretko/humaneval_x86_linux_reloc
+adpretko/humaneval_arm_linux_reloc
+adpretko/humaneval_riscv_linux_reloc
+adpretko/humaneval_arm_mac_reloc
+```
+
+## Relocation-preserving disassembly
+
+The final datasets preserve relocation information in binary-derived assembly.
+
+For relocatable objects:
+
+```text
+objdump -dr
+```
+
+or, on macOS:
+
+```text
+xcrun llvm-objdump -dr
+```
+
+For linked shared libraries and executables:
+
+```text
+objdump -drR
+```
+
+or, on macOS:
+
+```text
+xcrun llvm-objdump -drR
+```
+
+The relocation flags are important because plain `objdump -d` omits relocation records that are still present in relocatable object files.
 
 ## Source and executable construction
 
@@ -33,18 +86,22 @@ HumanEval entries contain function-level C source rather than complete standalon
 The original HumanEval source is preserved unchanged for:
 
 - `source_code`
-- compiler-generated assembly
-- relocatable object construction
+- normal compiler-generated assembly
+- PIC compiler-generated assembly
+- normal relocatable object construction
+- PIC relocatable object construction
 - shared-library construction
 
 A synthetic `main()` is appended only to a temporary executable source file so that a linked executable can be produced.
 
 The synthetic entry point is:
 
-    int main(void)
-    {
-        return 0;
-    }
+```c
+int main(void)
+{
+    return 0;
+}
+```
 
 It is used only to make executable construction possible. It does not execute or test the HumanEval function.
 
@@ -56,50 +113,147 @@ Original Linux generation script.
 
 It compiles the HumanEval source for the supported Linux targets and generates:
 
-- compiler assembly;
-- relocatable objects;
-- shared libraries;
-- linked executables;
-- binary-derived disassembly.
+- compiler assembly
+- relocatable objects
+- shared libraries
+- linked executables
+- binary-derived disassembly
 
 The original binary disassembly used plain `-d`.
+
+This script is retained for reproducibility of the original generation workflow.
 
 ### `build_humaneval_linux_reloc.py`
 
 Relocation-preserving Linux generation script.
 
-It generates corrected Linux outputs using:
+It produces the corrected relocation-preserving output trees and uses:
 
-- `.o` -> `objdump -dr`
-- shared library -> `objdump -drR`
-- executable -> `objdump -drR`
+```text
+normal relocatable object -> objdump -dr
+shared library            -> objdump -drR
+executable                -> objdump -drR
+```
 
-The corrected outputs are stored separately from the original generated datasets.
+The relocation-preserving outputs are stored separately from the original generated datasets.
+
+The builder also produces the PIC object used for shared-library construction.
 
 ### `validate_humaneval_linux_reloc.py`
 
 Validates the locally generated relocation-preserving Linux datasets.
 
-The validation checks that:
+The validation checks include:
 
-- all 164 tasks are present in both `O0` and `O2`;
-- task names and source code are preserved;
-- compiler-generated assembly is consistent with the original generation;
-- the underlying instruction disassembly has not unexpectedly changed;
-- saved objdump output exactly matches fresh `-dr` / `-drR` invocations;
-- generated binaries have the expected target formats.
+- all 164 tasks are present in both `O0` and `O2`
+- task names and source code are preserved
+- compiler-generated assembly is consistent with the expected generation
+- the underlying instruction disassembly has not unexpectedly changed
+- saved objdump output matches fresh relocation-preserving disassembly
+- generated binaries have the expected target formats
+
+### `add_pic_references_humaneval_linux.py`
+
+Adds the explicit PIC-reference artifacts needed by the final eight-column dataset.
+
+For every task in both optimization splits it creates:
+
+```text
+compiler.pic.s
+code.pic.o.objdump
+```
+
+`compiler.pic.s` is generated from the original source using the same target and optimization level as the existing PIC object, but with:
+
+```text
+-fPIC -S
+```
+
+instead of object generation.
+
+`code.pic.o.objdump` is generated by disassembling the existing PIC relocatable object with:
+
+```text
+objdump -dr
+```
+
+The script intentionally reuses the already generated `code.pic.o`.
+
+It does not rebuild the existing:
+
+- normal relocatable object
+- PIC relocatable object
+- shared library
+- executable
+
+This preserves the exact PIC object that was already used to construct the shared library.
 
 ### `upload_humaneval_linux_hf.py`
 
-Uploads the original Linux HumanEval datasets to Hugging Face.
+Uploads the original Linux HumanEval datasets.
+
+This script belongs to the original generation workflow and is retained for reproducibility.
 
 ### `upload_humaneval_linux_hf_reloc.py`
 
-Builds Hugging Face `DatasetDict` objects from the relocation-preserving Linux outputs and uploads the corrected datasets.
+Builds and uploads the earlier relocation-preserving dataset representation.
+
+This script predates the addition of the explicit PIC compiler and PIC object reference columns.
+
+It is retained for reproducibility.
+
+### `upload_humaneval_linux_hf_with_pic.py`
+
+Packages the final Linux datasets with the complete eight-column schema:
+
+```text
+task_name
+source_code
+compiler_asm
+object_asm
+shared_asm
+program_asm
+compiler_pic_asm
+pic_object_asm
+```
+
+It supports all three Linux targets:
+
+```text
+x86_linux
+arm_linux
+riscv_linux
+```
+
+which correspond to:
+
+```text
+adpretko/humaneval_x86_linux_reloc
+adpretko/humaneval_arm_linux_reloc
+adpretko/humaneval_riscv_linux_reloc
+```
+
+The script validates the expected row count, schema, task ordering, source-code identity, and non-empty assembly fields before upload.
+
+To validate locally without uploading:
+
+```bash
+python upload_humaneval_linux_hf_with_pic.py --validate-only
+```
+
+To build, validate, and upload all Linux targets:
+
+```bash
+python upload_humaneval_linux_hf_with_pic.py
+```
 
 ### `validate_humaneval_linux_hf.py`
 
-Loads the uploaded relocation-preserving Linux datasets back from Hugging Face and verifies that every uploaded row and field exactly matches the corresponding local dataset.
+Validation utility for the earlier relocation-preserving Hugging Face workflow.
+
+It is retained alongside the original upload scripts for reproducibility.
+
+The final PIC-aware packaging and schema checks are performed by `upload_humaneval_linux_hf_with_pic.py`.
 
 ## ARM64 macOS
 
@@ -109,26 +263,30 @@ Original ARM64 macOS generation script.
 
 For each HumanEval task it produces:
 
-- `source.c`
-- `program_source.c`
-- `compiler.s`
-- `code.o`
-- `code.o.objdump`
-- `code.pic.o`
-- `code.dylib`
-- `code.dylib.objdump`
-- `code.program`
-- `code.program.objdump`
+```text
+source.c
+program_source.c
+compiler.s
+code.o
+code.o.objdump
+code.pic.o
+code.dylib
+code.dylib.objdump
+code.program
+code.program.objdump
+```
 
 `source.c` contains the original HumanEval source exactly.
 
 `program_source.c` contains the same source plus the synthetic `main()` used only for executable linking.
 
+`code.pic.o` is the position-independent object used to construct `code.dylib`.
+
 ### `probe_humaneval_macos.py`
 
 Auxiliary probe script for the HumanEval macOS generation workflow.
 
-It is kept alongside the generation scripts as a utility for checking the macOS setup before or during dataset-generation work.
+It is kept alongside the generation scripts as a utility for checking the macOS toolchain and generation setup.
 
 ### Why macOS uses a refresh workflow
 
@@ -138,82 +296,281 @@ Mach-O dynamic libraries contain an `LC_ID_DYLIB` load command. Rebuilding a dyl
 
 That would cause the newly built binary to differ from the original even when the C source, compiler options, and intended code generation were otherwise unchanged.
 
-To ensure that the corrected dataset uses exactly the same original binary artifacts, the macOS correction therefore uses this workflow:
+To ensure that the corrected dataset uses the same original binary artifacts, the macOS relocation-preserving workflow is:
 
 1. Copy the original generated directory byte-for-byte to a `_reloc` directory.
-2. Leave all source files, compiler assembly, objects, dylibs, and executables unchanged.
+2. Leave the source files, compiler assembly, objects, dylibs, and executables unchanged.
 3. Regenerate only the `.objdump` files using relocation-preserving flags.
-4. Validate that every non-`.objdump` artifact remains byte-for-byte identical.
+4. Validate that the non-objdump artifacts remain byte-for-byte identical.
 
-This isolates the correction to the binary-to-text disassembly step.
+This isolates the original correction to the binary-to-text disassembly step.
 
 ### `refresh_humaneval_arm64_macos_objdump_reloc.py`
 
-Regenerates only the objdump text from the copied original binaries:
+Regenerates the objdump text from the copied original binaries using relocation-preserving flags:
 
-- `code.o` -> `llvm-objdump -dr`
-- `code.dylib` -> `llvm-objdump -drR`
-- `code.program` -> `llvm-objdump -drR`
+```text
+code.o       -> xcrun llvm-objdump -dr
+code.dylib   -> xcrun llvm-objdump -drR
+code.program -> xcrun llvm-objdump -drR
+```
 
-All other files remain untouched.
+All other existing artifacts remain untouched.
 
 ### `validate_humaneval_arm64_macos_reloc.py`
 
-Performs local validation of the corrected macOS dataset.
+Performs local validation of the relocation-preserving macOS dataset.
 
 It verifies that:
 
-- both `O0` and `O2` contain all 164 HumanEval tasks;
-- old and new directory/file layouts match;
-- every non-`.objdump` file is byte-for-byte identical to the original;
-- every new `.objdump` file exactly matches a fresh invocation of the intended `-dr` or `-drR` command;
-- the binary format is ARM64 Mach-O.
+- both `O0` and `O2` contain all 164 HumanEval tasks
+- old and new directory/file layouts match
+- non-objdump artifacts remain byte-for-byte identical where expected
+- refreshed objdump files match fresh invocations of the intended commands
+- the binary format is ARM64 Mach-O
 
-This gives 328 validated task/split instances in total.
+This covers 328 task/split instances:
+
+```text
+164 O0 + 164 O2 = 328
+```
+
+### `add_pic_references_humaneval_arm64_macos.py`
+
+Adds the two explicit PIC-reference artifacts needed by the final macOS dataset:
+
+```text
+compiler.pic.s
+code.pic.o.objdump
+```
+
+`compiler.pic.s` is generated from the original source using:
+
+```text
+xcrun clang -arch arm64 -O0/-O2 -fPIC -S
+```
+
+`code.pic.o.objdump` is generated from the existing PIC object using:
+
+```text
+xcrun llvm-objdump -dr code.pic.o
+```
+
+The script deliberately reuses the existing `code.pic.o` that was already used to construct `code.dylib`.
+
+It does not rebuild the existing:
+
+- `code.pic.o`
+- `code.dylib`
+- `code.o`
+- `code.program`
+
+This preserves the provenance between:
+
+```text
+compiler_pic_asm
+    -> pic_object_asm
+    -> shared_asm
+```
 
 ### `upload_humaneval_arm64_macos_hf.py`
 
-Builds and uploads the original ARM64 macOS HumanEval `DatasetDict`.
+Builds and uploads the original ARM64 macOS HumanEval dataset.
+
+It is retained for reproducibility of the original workflow.
 
 ### `upload_humaneval_arm64_macos_hf_reloc.py`
 
-Builds the corrected ARM64 macOS `DatasetDict` from the `_reloc` output directory and uploads it to:
+Builds and uploads the earlier relocation-preserving ARM64 macOS dataset.
 
-`adpretko/humaneval_arm_mac_reloc`
+It predates the addition of the explicit PIC reference columns and is retained for reproducibility.
 
-The uploaded dataset contains:
+### `upload_humaneval_arm64_macos_hf_with_pic.py`
 
-- 164 `O0` rows
-- 164 `O2` rows
+Produces the final ARM64 macOS dataset with the eight-column schema:
 
-with the fields:
+```text
+task_name
+source_code
+compiler_asm
+object_asm
+shared_asm
+program_asm
+compiler_pic_asm
+pic_object_asm
+```
 
-- `task_name`
-- `source_code`
-- `compiler_asm`
-- `object_asm`
-- `shared_asm`
-- `program_asm`
+Target repository:
+
+```text
+adpretko/humaneval_arm_mac_reloc
+```
+
+The script first loads the current live Hugging Face dataset and verifies that the existing dataset fields correspond to the local relocation-preserving artifact tree.
+
+It then adds:
+
+```text
+compiler_pic_asm
+pic_object_asm
+```
+
+from:
+
+```text
+compiler.pic.s
+code.pic.o.objdump
+```
+
+The script supports local validation without upload:
+
+```bash
+python3 upload_humaneval_arm64_macos_hf_with_pic.py --validate-only
+```
+
+It can also reload and verify the final live Hugging Face dataset:
+
+```bash
+python3 upload_humaneval_arm64_macos_hf_with_pic.py --verify-live
+```
 
 ### `validate_humaneval_arm64_macos_hf.py`
 
-Downloads the uploaded relocation-preserving macOS dataset and compares all 328 rows (`164 O0 + 164 O2`) and every field exactly against the locally reconstructed dataset.
+Validation utility for the earlier relocation-preserving macOS Hugging Face workflow.
+
+It is retained for reproducibility.
+
+The final PIC-aware live dataset can additionally be verified directly with:
+
+```bash
+python3 upload_humaneval_arm64_macos_hf_with_pic.py --verify-live
+```
+
+## Final provenance model
+
+The important methodological distinction in the final datasets is:
+
+```text
+                 NORMAL COMPILATION
+
+source_code
+    |
+    +--> compiler_asm
+            |
+            +--> object_asm
+                    |
+                    +--> program_asm
+
+
+                   PIC COMPILATION
+
+source_code
+    |
+    +--> compiler_pic_asm
+            |
+            +--> pic_object_asm
+                    |
+                    +--> shared_asm
+```
+
+The two families originate from the same C source and optimization level, but they are not required to produce identical assembly.
+
+In particular, optimized PIC and non-PIC compilation can legitimately differ because position-independent code generation changes how addresses, globals, calls, and other operations are represented.
+
+For that reason, downstream analysis should preserve the two provenance families rather than treating all six representations as one linear compilation chain.
 
 ## Recommended workflow
 
 ### Linux
 
-1. Run `build_humaneval_linux_reloc.py`.
-2. Run `validate_humaneval_linux_reloc.py`.
-3. Run `upload_humaneval_linux_hf_reloc.py`.
-4. Run `validate_humaneval_linux_hf.py`.
+Generate the relocation-preserving binaries:
 
-### macOS
+```bash
+python build_humaneval_linux_reloc.py
+```
 
-1. Copy `generated_humaneval_arm64_mac` to `generated_humaneval_arm64_mac_reloc`.
-2. Run `refresh_humaneval_arm64_macos_objdump_reloc.py`.
-3. Run `validate_humaneval_arm64_macos_reloc.py`.
-4. Run `upload_humaneval_arm64_macos_hf_reloc.py`.
-5. Run `validate_humaneval_arm64_macos_hf.py`.
+Validate them:
 
-The original generation scripts and datasets are retained for reproducibility. The `_reloc` versions are the corrected datasets that preserve relocation information in the binary-derived assembly.
+```bash
+python validate_humaneval_linux_reloc.py
+```
+
+Generate the explicit PIC compiler/object references:
+
+```bash
+python add_pic_references_humaneval_linux.py
+```
+
+Validate final Hugging Face packaging without uploading:
+
+```bash
+python upload_humaneval_linux_hf_with_pic.py --validate-only
+```
+
+Upload the final eight-column datasets:
+
+```bash
+python upload_humaneval_linux_hf_with_pic.py
+```
+
+### ARM64 macOS
+
+Start from the original generated macOS dataset and create the relocation-preserving copy:
+
+```text
+generated_humaneval_arm64_mac
+    ->
+generated_humaneval_arm64_mac_reloc
+```
+
+Refresh the binary disassembly:
+
+```bash
+python3 refresh_humaneval_arm64_macos_objdump_reloc.py
+```
+
+Validate the relocation-preserving copy:
+
+```bash
+python3 validate_humaneval_arm64_macos_reloc.py
+```
+
+Generate the explicit PIC compiler/object references:
+
+```bash
+python3 add_pic_references_humaneval_arm64_macos.py
+```
+
+Validate final dataset packaging without uploading:
+
+```bash
+python3 upload_humaneval_arm64_macos_hf_with_pic.py --validate-only
+```
+
+Upload the final eight-column dataset:
+
+```bash
+python3 upload_humaneval_arm64_macos_hf_with_pic.py
+```
+
+Verify the final live Hugging Face dataset:
+
+```bash
+python3 upload_humaneval_arm64_macos_hf_with_pic.py --verify-live
+```
+
+## Reproducibility note
+
+The original generation, upload, and validation scripts are intentionally retained.
+
+They document the progression from:
+
+```text
+original binary disassembly
+        ->
+relocation-preserving disassembly
+        ->
+explicit normal/PIC provenance
+```
+
+The final `_reloc` Hugging Face datasets contain the complete eight-column representation and should be used for the current cross-ISA translation experiments.
