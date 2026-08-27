@@ -11,7 +11,9 @@ There are 164 HumanEval tasks in each optimization split (`O0` and `O2`).
 
 ## Final dataset schema
 
-For each HumanEval task and optimization level, the final relocation-preserving datasets contain:
+The existing `_reloc` datasets are preserved as the validated eight-column base representation. The newer `_reloc_v2` datasets retain those eight columns unchanged and append `program_asm_v2` as a ninth column.
+
+For each HumanEval task and optimization level, the `_reloc_v2` datasets contain:
 
 - `task_name` - HumanEval task identifier
 - `source_code` - original C source
@@ -21,8 +23,9 @@ For each HumanEval task and optimization level, the final relocation-preserving 
 - `program_asm` - relocation-preserving disassembly of the linked executable
 - `compiler_pic_asm` - compiler-generated assembly from the PIC compilation path using `-fPIC -S`
 - `pic_object_asm` - relocation-preserving disassembly of the PIC relocatable object
+- `program_asm_v2` - additive semantic-data-augmented linked-program representation containing the existing `program_asm` verbatim plus semantic data-section contents and metadata
 
-The six assembly representations belong to two distinct compilation-provenance families:
+The original six assembly representations belong to two distinct compilation-provenance families. `program_asm_v2` is an additive enrichment of the normal linked-program representation:
 
 ```text
 NORMAL
@@ -40,13 +43,22 @@ This distinction is important.
 
 The linked shared library is built from separately compiled position-independent (`-fPIC`) objects. Therefore, `shared_asm` belongs to the PIC compilation lineage and should be compared against `compiler_pic_asm` and `pic_object_asm`, rather than against the normal `compiler_asm` and `object_asm` lineage.
 
-The final datasets are published at:
+The validated eight-column `_reloc` base datasets are published at:
 
 ```text
 adpretko/humaneval_x86_linux_reloc
 adpretko/humaneval_arm_linux_reloc
 adpretko/humaneval_riscv_linux_reloc
 adpretko/humaneval_arm_mac_reloc
+```
+
+The additive nine-column `_reloc_v2` datasets are:
+
+```text
+adpretko/humaneval_x86_linux_reloc_v2
+adpretko/humaneval_arm_linux_reloc_v2
+adpretko/humaneval_riscv_linux_reloc_v2
+adpretko/humaneval_arm_mac_reloc_v2
 ```
 
 ## Relocation-preserving disassembly
@@ -105,6 +117,59 @@ int main(void)
 
 It is used only to make executable construction possible. It does not execute or test the HumanEval function.
 
+## `program_asm_v2`: semantic-data-augmented linked-program representation
+
+The original `program_asm` representation is retained unchanged. It is the
+relocation-preserving disassembly of the linked executable and remains useful
+for code and control-flow analysis.
+
+For whole-program translation, however, disassembly alone is not always
+sufficient. Program behavior can also depend on initialized data
+stored outside the executable code section, including string literals, lookup
+tables, initialized globals, and floating-point constants.
+
+The additive `program_asm_v2` representation therefore reuses the exact
+already-validated executable and embeds the existing validated `program_asm`
+verbatim. It does **not** rebuild, recompile, or relink the program.
+
+On Linux, `program_asm_v2` contains:
+
+```text
+semantic section layout / metadata
+
+existing validated program_asm verbatim
+
+initialized semantic section contents:
+    .rodata
+    .data
+    .data.rel.ro    when present
+
+semantic data symbols
+
+.bss layout / symbol metadata only
+```
+
+`.bss` is zero-fill storage, so no synthetic raw zero-byte dump is added.
+
+Linker/runtime-only sections are not added as semantic raw-data blocks.
+
+Generate the Linux `program_asm_v2` sidecars with:
+
+```bash
+python make_program_asm_v2_linux.py
+```
+
+The generated sidecars and provenance manifest are written beneath:
+
+```text
+program_asm_v2_full/
+```
+
+The `_reloc_v2` Hugging Face datasets are additive extensions of the existing
+`_reloc` datasets. Every existing field is preserved unchanged and
+`program_asm_v2` is appended as a ninth column.
+
+
 ## Linux
 
 ### `build_humaneval_linux.py`
@@ -154,7 +219,7 @@ The validation checks include:
 
 ### `add_pic_references_humaneval_linux.py`
 
-Adds the explicit PIC-reference artifacts needed by the final eight-column dataset.
+Adds the explicit PIC-reference artifacts needed by the validated eight-column `_reloc` base dataset.
 
 For every task in both optimization splits it creates:
 
@@ -188,6 +253,18 @@ It does not rebuild the existing:
 
 This preserves the exact PIC object that was already used to construct the shared library.
 
+### `make_program_asm_v2_linux.py`
+
+Builds the additive `program_asm_v2` representation from the already-validated linked Linux executables and their existing `program_asm` text.
+
+It does not recompile or relink the binaries. It preserves the existing `program_asm` verbatim, adds selected semantic section layout/content and symbols, and records `.bss` as metadata without synthesizing raw zero bytes.
+
+Outputs are written under:
+
+```text
+program_asm_v2_full/
+```
+
 ### `upload_humaneval_linux_hf.py`
 
 Uploads the original Linux HumanEval datasets.
@@ -204,7 +281,7 @@ It is retained for reproducibility.
 
 ### `upload_humaneval_linux_hf_with_pic.py`
 
-Packages the final Linux datasets with the complete eight-column schema:
+Packages the validated Linux `_reloc` base datasets with the eight-column schema:
 
 ```text
 task_name
@@ -253,7 +330,7 @@ Validation utility for the earlier relocation-preserving Hugging Face workflow.
 
 It is retained alongside the original upload scripts for reproducibility.
 
-The final PIC-aware packaging and schema checks are performed by `upload_humaneval_linux_hf_with_pic.py`.
+The PIC-aware base-dataset packaging and schema checks are performed by `upload_humaneval_linux_hf_with_pic.py`.
 
 ## ARM64 macOS
 
@@ -387,7 +464,7 @@ It predates the addition of the explicit PIC reference columns and is retained f
 
 ### `upload_humaneval_arm64_macos_hf_with_pic.py`
 
-Produces the final ARM64 macOS dataset with the eight-column schema:
+Produces the validated ARM64 macOS `_reloc` base dataset with the eight-column schema:
 
 ```text
 task_name
@@ -440,7 +517,7 @@ Validation utility for the earlier relocation-preserving macOS Hugging Face work
 
 It is retained for reproducibility.
 
-The final PIC-aware live dataset can additionally be verified directly with:
+The live PIC-aware eight-column base dataset can additionally be verified directly with:
 
 ```bash
 python3 upload_humaneval_arm64_macos_hf_with_pic.py --verify-live
@@ -459,7 +536,12 @@ source_code
             |
             +--> object_asm
                     |
-                    +--> program_asm
+                    +--> linked executable
+                            |
+                            +--> program_asm
+                            |
+                            +--> program_asm_v2
+                                 (program_asm verbatim + semantic data from the same executable)
 
 
                    PIC COMPILATION
@@ -507,11 +589,24 @@ Validate final Hugging Face packaging without uploading:
 python upload_humaneval_linux_hf_with_pic.py --validate-only
 ```
 
-Upload the final eight-column datasets:
+Upload the validated eight-column base datasets:
 
 ```bash
 python upload_humaneval_linux_hf_with_pic.py
 ```
+
+
+Generate the semantic-data-augmented linked-program sidecars from the
+already-validated Linux executables:
+
+```bash
+python make_program_asm_v2_linux.py
+```
+
+The resulting `program_asm_v2` text is published additively in the
+`_reloc_v2` Hugging Face datasets. The original `_reloc` datasets and all
+eight of their existing columns remain unchanged.
+
 
 ### ARM64 macOS
 
@@ -547,13 +642,13 @@ Validate final dataset packaging without uploading:
 python3 upload_humaneval_arm64_macos_hf_with_pic.py --validate-only
 ```
 
-Upload the final eight-column dataset:
+Upload the validated eight-column base dataset:
 
 ```bash
 python3 upload_humaneval_arm64_macos_hf_with_pic.py
 ```
 
-Verify the final live Hugging Face dataset:
+Verify the live eight-column base Hugging Face dataset:
 
 ```bash
 python3 upload_humaneval_arm64_macos_hf_with_pic.py --verify-live
@@ -571,6 +666,8 @@ original binary disassembly
 relocation-preserving disassembly
         ->
 explicit normal/PIC provenance
+        ->
+semantic-data-augmented program_asm_v2
 ```
 
-The final `_reloc` Hugging Face datasets contain the complete eight-column representation and should be used for the current cross-ISA translation experiments.
+The `_reloc` Hugging Face datasets retain the validated eight-column representation for reproducibility. The newer `_reloc_v2` datasets append `program_asm_v2` and should be used when whole-program translation requires semantic data in addition to disassembly and relocations.
